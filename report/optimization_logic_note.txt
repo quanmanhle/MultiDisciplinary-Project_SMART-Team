@@ -1,0 +1,44 @@
+OPTIMIZATION LOGIC NOTE
+
+Purpose:
+Use the predicted next-hour household consumption to trigger simple rule-based device control during peak periods.
+
+1. Trigger condition
+If the predicted next-hour total consumption (main) is higher than a predefined threshold, the optimization module is activated.
+
+2. Goal
+- reduce peak load
+- improve energy efficiency
+- keep essential devices running
+
+3. Device priority
+High-priority devices (keep ON):
+- fridge
+- security-related devices
+- essential lighting
+
+Low-priority devices (can be turned off or deferred):
+- washer dryer
+- dish washer
+- microwave
+- electric stove (only in simulation if appropriate)
+
+4. Optimization action
+When peak is predicted:
+- keep all high-priority devices ON
+- sort controllable devices by priority
+- turn OFF or DEFER low-priority devices first
+- stop once predicted load is reduced below threshold or no more low-priority devices are available
+
+5. Output format
+The optimization module should produce a list of recommended actions, for example:
+
+[
+  {"device": "washer dryer", "action": "off", "reason": "peak predicted"},
+  {"device": "dish washer", "action": "defer", "reason": "low priority"}
+]
+
+6. Notes
+- this is a rule-based optimization strategy for the capstone scope
+- it is intended as a simulation / recommendation layer
+- the final threshold value can be adjusted after initial prediction results are available
