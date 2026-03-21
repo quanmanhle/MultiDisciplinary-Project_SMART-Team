@@ -12,10 +12,10 @@ Build a distributed smart energy management demo system where multiple homes col
 - Streamlit dashboard
 
 ## Folder Structure
-- `data/`: raw and processed datasets
-- `models/`: local model scripts
-- `fl_server/`: federated server code
-- `fl_clients/`: client code
-- `dashboard/`: demo UI
+- `data/`: raw and processed datasets (Khánh)
+- `models/`: local model scripts (Thành Ngu)
+- `fl_server/`: federated server code (Pô)
+- `fl_clients/`: client code (Sáng)
+- `dashboard/`: demo UI (Duy)
 - `results/`: metrics, plots, logs
-- `report/`: report files
+- `report/`: report files (Quân Võ ngoo)
