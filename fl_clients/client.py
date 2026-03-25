@@ -30,7 +30,6 @@ def split_time_series(df: pd.DataFrame, train_ratio: float = 0.8) -> Tuple[pd.Da
 def find_house_file(project_root: Path, house_name: str) -> Path:
     candidates = [
         project_root / "data" / "processed" / f"{house_name}_hourly_clean.csv",
-        project_root / "models" / "processed" / f"{house_name}_hourly_clean.csv",
     ]
 
     for candidate in candidates:
