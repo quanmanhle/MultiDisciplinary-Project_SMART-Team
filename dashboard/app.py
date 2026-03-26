@@ -4,14 +4,13 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import os
-import glob
 
 # ===== CẤU HÌNH TRANG =====
 st.set_page_config(
     page_title="Smart Home Energy Dashboard",
     page_icon="🏠",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"  
 )
 
 st.title("Smart Home Energy Optimization")
@@ -55,30 +54,42 @@ def generate_energy_data(days=1):
     })
     return df
 
-# ===== XÁC ĐỊNH ĐƯỜNG DẪN =====
 current_dir = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(current_dir)  
-MODELS_RESULTS_DIR = os.path.join(BASE_DIR, "models", "results")
-DATA_PATH = os.path.join(BASE_DIR, "data", "processed")
+BASE_DIR = os.path.dirname(current_dir)
 
-def find_file(filename, start_dir=BASE_DIR):
-    if os.path.exists(os.path.join(MODELS_RESULTS_DIR, filename)):
-        return os.path.join(MODELS_RESULTS_DIR, filename)
-    for root, dirs, files in os.walk(start_dir):
+DATA_PATH = os.path.join(BASE_DIR, "data", "processed")
+MODELS_RESULTS_DIR = os.path.join(BASE_DIR, "models", "results")
+RESULTS_DIR = os.path.join(BASE_DIR, "results")
+
+def find_file(filename):
+    candidates = [
+        os.path.join(MODELS_RESULTS_DIR, filename),
+        os.path.join(RESULTS_DIR, filename),
+    ]
+    for cand in candidates:
+        if os.path.exists(cand):
+            return cand
+    for root, dirs, files in os.walk(BASE_DIR):
         if filename in files:
             return os.path.join(root, filename)
     return None
 
-def find_dir(dirname, start_dir=BASE_DIR):
-    if os.path.exists(os.path.join(MODELS_RESULTS_DIR, dirname)):
-        return os.path.join(MODELS_RESULTS_DIR, dirname)
-    for root, dirs, files in os.walk(start_dir):
+def find_dir(dirname):
+    candidates = [
+        os.path.join(MODELS_RESULTS_DIR, dirname),
+        os.path.join(RESULTS_DIR, dirname),
+    ]
+    for cand in candidates:
+        if os.path.exists(cand):
+            return cand
+    for root, dirs, files in os.walk(BASE_DIR):
         if dirname in dirs:
             return os.path.join(root, dirname)
     return None
 
-
-metrics_file = find_file("local_metrics.csv") or find_file("localMetrics.csv")
+# Tìm các file
+fl_client_metrics_file = find_file("fl_client_test_results.csv")
+local_metrics_file = find_file("local_metrics.csv")
 plots_dir = find_dir("plots")
 predictions_dir = find_dir("predictions")
 fl_log_path = find_file("fl_round_logs.csv")
@@ -106,17 +117,27 @@ def load_fl_logs():
     return None
 
 def load_local_metrics():
-    if metrics_file and os.path.exists(metrics_file):
-        df = pd.read_csv(metrics_file)
-        # Đảm bảo tên cột house là chuẩn
+    if local_metrics_file and os.path.exists(local_metrics_file):
+        df = pd.read_csv(local_metrics_file)
         if 'house' not in df.columns:
             if 'House' in df.columns:
                 df = df.rename(columns={'House': 'house'})
-            else:
-                # Thử tìm cột đầu tiên
-                first_col = df.columns[0]
-                if first_col.lower() == 'house':
-                    df = df.rename(columns={first_col: 'house'})
+        return df
+    return None
+
+def load_fl_client_metrics():
+    if fl_client_metrics_file and os.path.exists(fl_client_metrics_file):
+        df = pd.read_csv(fl_client_metrics_file)
+        if 'house' not in df.columns:
+            if 'House' in df.columns:
+                df = df.rename(columns={'House': 'house'})
+        df = df.rename(columns={
+            'train_r2': 'train_r2',
+            'test_mae': 'test_mae',
+            'test_rmse': 'test_rmse',
+            'test_r2': 'test_r2',
+            'test_loss': 'test_loss'
+        })
         return df
     return None
 
@@ -128,40 +149,17 @@ def load_predictions(house_name):
             return df
     return None
 
+def load_coefficients(house_name):
+    file_path = os.path.join(MODELS_RESULTS_DIR, f"{house_name}_coefficients.csv")
+    if os.path.exists(file_path):
+        df = pd.read_csv(file_path)
+        return df
+    return None
+
 houses_data = load_all_houses()
 fl_logs = load_fl_logs()
 local_metrics = load_local_metrics()
-
-# ===== SIDEBAR: HIỂN THỊ BIỂU ĐỒ =====
-with st.sidebar:
-    st.header("📈 Biểu đồ dự đoán")
-    st.markdown("Chọn hộ và mô hình để xem biểu đồ chi tiết")
-
-    if houses_data:
-        house_list = list(houses_data.keys())
-    else:
-        house_list = ["house1", "house2", "house3", "house4", "house6"]
-
-    selected_house = st.selectbox("Chọn hộ", house_list, format_func=lambda x: x.capitalize())
-    model_type = st.selectbox(
-        "Chọn mô hình",
-        options=["linear_regression", "naive_baseline"],
-        format_func=lambda x: "Linear Regression" if x == "linear_regression" else "Naive Baseline"
-    )
-
-    # Tìm ảnh trong plots_dir
-    img_path = None
-    if plots_dir:
-        possible_ext = ['.png']
-        for ext in possible_ext:
-            candidate = os.path.join(plots_dir, f"{selected_house}_{model_type}{ext}")
-            if os.path.exists(candidate):
-                img_path = candidate
-                break
-    if img_path:
-        st.image(img_path, caption=f"{selected_house.capitalize()} - {model_type.replace('_', ' ').title()}", use_container_width=True)
-    else:
-        st.info(f"Chưa có biểu đồ cho {selected_house} - {model_type}")
+fl_client_metrics = load_fl_client_metrics()
 
 # ===== HÀNG 1: TỔNG QUAN HỆ THỐNG =====
 st.header("📊 Tổng quan hệ thống")
@@ -223,67 +221,103 @@ with row1_col2:
 
 st.divider()
 
+# ===== HÀNG 2: TRẠNG THÁI CLIENT & SO SÁNH MÔ HÌNH =====
 st.header("📈 Trạng thái các client & so sánh mô hình")
 row2_col1, row2_col2 = st.columns(2)
 
 with row2_col1:
-    st.subheader("Thông tin các hộ tham gia")
+    st.subheader("Thông tin chi tiết từng hộ")
     if houses_data:
         clients_list = []
         for house_name, df in houses_data.items():
             total_consumption = df['main'].sum()
             avg_consumption = df['main'].mean()
-            # Lấy R² từ local_metrics
-            r2_str = "..."
+            devices = np.random.randint(3, 8)
+            train_r2_fl = "..."
+            test_r2_local = "..."
+            test_r2_fl = "..."
+            test_mae_local = "..."
+            test_mae_fl = "..."
+            test_rmse_local = "..."
+            test_rmse_fl = "..."
+
             if local_metrics is not None:
                 mask = (local_metrics['house'] == house_name) & (local_metrics['model'] == 'linear_regression')
                 if mask.any():
-                    r2_val = local_metrics.loc[mask, 'r2'].values[0]
-                    r2_str = f"{r2_val:.3f}"
-            # Lấy FL logs
-            last_round = "..."
-            last_loss = "..."
-            if fl_logs is not None and not fl_logs.empty:
-                last_round = fl_logs['round'].iloc[-1]
-                last_loss = fl_logs['loss'].iloc[-1] if 'loss' in fl_logs else "..."
-            devices = np.random.randint(3, 8)
+                    row = local_metrics.loc[mask].iloc[0]
+                    test_r2_local = f"{row['r2']:.3f}" if pd.notna(row['r2']) else "..."
+                    test_mae_local = f"{row['mae']:.3f}" if pd.notna(row['mae']) else "..."
+                    test_rmse_local = f"{row['rmse']:.3f}" if pd.notna(row['rmse']) else "..."
+
+            if fl_client_metrics is not None:
+                mask = fl_client_metrics['house'] == house_name
+                if mask.any():
+                    row = fl_client_metrics.loc[mask].iloc[0]
+                    train_r2_fl = f"{row['train_r2']:.3f}" if pd.notna(row.get('train_r2', np.nan)) else "..."
+                    test_r2_fl = f"{row['test_r2']:.3f}" if pd.notna(row.get('test_r2', np.nan)) else "..."
+                    test_mae_fl = f"{row['test_mae']:.3f}" if pd.notna(row.get('test_mae', np.nan)) else "..."
+                    test_rmse_fl = f"{row['test_rmse']:.3f}" if pd.notna(row.get('test_rmse', np.nan)) else "..."
+
             clients_list.append({
                 "Hộ": house_name,
-                "Tổng tiêu thụ (scaled)": f"{total_consumption:.2f}",
-                "Trung bình (scaled)": f"{avg_consumption:.2f}",
-                "Vòng FL": last_round,
-                "Loss": f"{last_loss:.4f}" if isinstance(last_loss, float) else last_loss,
-                "R² (local)": r2_str,
+                "Tổng tiêu thụ(kWh)": f"{total_consumption:.2f}",
+                "Trung bình": f"{avg_consumption:.2f}",
+                "Train R² (FL)": train_r2_fl,
+                "Test R² (Local)": test_r2_local,
+                "Test R² (FL)": test_r2_fl,
+                "Test MAE (Local)": test_mae_local,
+                "Test MAE (FL)": test_mae_fl,
+                "Test RMSE (Local)": test_rmse_local,
+                "Test RMSE (FL)": test_rmse_fl,
                 "Thiết bị": devices
             })
         df_clients = pd.DataFrame(clients_list)
         st.dataframe(df_clients, use_container_width=True, hide_index=True)
-        st.caption("🔧 *R² (local) từ linear regression; các cột FL là placeholder cho đến khi có log.*")
+        st.caption("🔧 **Chú thích:** Train R² (FL) từ kết quả huấn luyện FL client; Test metrics (Local) từ mô hình local (linear regression); Test metrics (FL) từ đánh giá FL client.")
     else:
         st.info("Không có dữ liệu hộ. Kiểm tra thư mục data/processed.")
 
 with row2_col2:
     st.subheader("So sánh hiệu năng các mô hình")
-    if local_metrics is not None:
-        naive = local_metrics[local_metrics['model'] == 'naive_baseline']
-        lr = local_metrics[local_metrics['model'] == 'linear_regression']
-        naive_avg = naive[['mae','rmse','r2']].mean()
-        lr_avg = lr[['mae','rmse','r2']].mean()
+
+    if local_metrics is not None and fl_client_metrics is not None:
+        naive_mask = local_metrics['model'] == 'naive_baseline'
+        if naive_mask.any():
+            naive_r2 = local_metrics.loc[naive_mask, 'r2'].mean()
+            naive_mae = local_metrics.loc[naive_mask, 'mae'].mean()
+            naive_rmse = local_metrics.loc[naive_mask, 'rmse'].mean()
+        else:
+            naive_r2, naive_mae, naive_rmse = -0.1, 0.05, 0.1
+
+        lr_mask = local_metrics['model'] == 'linear_regression'
+        if lr_mask.any():
+            local_r2 = local_metrics.loc[lr_mask, 'r2'].mean()
+            local_mae = local_metrics.loc[lr_mask, 'mae'].mean()
+            local_rmse = local_metrics.loc[lr_mask, 'rmse'].mean()
+        else:
+            local_r2, local_mae, local_rmse = 0.5, 0.02, 0.06
+
+        fed_r2 = fl_client_metrics['test_r2'].mean() if 'test_r2' in fl_client_metrics else 0.84
+        fed_mae = fl_client_metrics['test_mae'].mean() if 'test_mae' in fl_client_metrics else 0.27
+        fed_rmse = fl_client_metrics['test_rmse'].mean() if 'test_rmse' in fl_client_metrics else 0.13
+
         model_r2 = {
-            "Naive (baseline)": naive_avg['r2'],
-            "Local (linear)": lr_avg['r2'],
-            "Federated (FL)": 0.84
+            "Naive (baseline)": naive_r2,
+            "Local (linear)": local_r2,
+            "Federated (FL)": fed_r2
         }
         df_models = pd.DataFrame.from_dict(model_r2, orient='index', columns=['R²'])
         st.bar_chart(df_models)
-        col_err1, col_err2, col_err3 = st.columns(3)
-        with col_err1:
-            st.metric("MAE - Naive", f"{naive_avg['mae']:.3f}", "±0.05")
-        with col_err2:
-            st.metric("MAE - Local", f"{lr_avg['mae']:.3f}", "±0.03")
-        with col_err3:
-            st.metric("MAE - Federated", "0.27", "±0.02")
-        st.caption("🔧 *Federated metrics đang là placeholder – sẽ cập nhật từ FL logs.*")
+
+        st.markdown("**So sánh chi tiết các chỉ số (trung bình trên các hộ)**")
+        comparison_df = pd.DataFrame({
+            "Mô hình": ["Naive baseline", "Local linear", "Federated FL"],
+            "R²": [f"{naive_r2:.3f}", f"{local_r2:.3f}", f"{fed_r2:.3f}"],
+            "MAE": [f"{naive_mae:.3f}", f"{local_mae:.3f}", f"{fed_mae:.3f}"],
+            "RMSE": [f"{naive_rmse:.3f}", f"{local_rmse:.3f}", f"{fed_rmse:.3f}"]
+        })
+        st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+        st.caption("🔧 *Giá trị trung bình trên 5 hộ. Federated metrics từ kết quả đánh giá client; Local và Naive từ local_metrics.csv.*")
     else:
         model_acc = {
             "Naive (trung bình)": 0.65,
@@ -299,7 +333,7 @@ with row2_col2:
             st.metric("MAE - Local", "0.31", "±0.03")
         with col_err3:
             st.metric("MAE - Federated", "0.27", "±0.02")
-        st.caption("🔧 *Đang hiển thị dữ liệu mẫu. Chạy local_models.py để có kết quả thực.*")
+        st.caption("🔧 *Đang hiển thị dữ liệu mẫu. Cần có local_metrics.csv và fl_client_test_results.csv để có dữ liệu thật.*")
 
 st.divider()
 
@@ -327,55 +361,52 @@ st.header("⚡ Tối ưu hóa & điều khiển")
 row3_col1, row3_col2 = st.columns(2)
 
 with row3_col1:
-    st.subheader("Chỉ số năng lượng tổng quan")
+    st.subheader("📈 Biểu đồ dự đoán")
+    st.markdown("Chọn hộ và mô hình để xem biểu đồ chi tiết")
+
     if houses_data:
-        df_house = houses_data['house1'].iloc[-24:]
-        total_today = df_house['main'].sum()
-        col_metric1, col_metric2, col_metric3 = st.columns(3)
-        with col_metric1:
-            st.metric("Tổng tiêu thụ hôm nay", f"{total_today:.2f} (scaled)", "-8%")
-        with col_metric2:
-            st.metric("Tiết kiệm dự kiến", "...", "+5%")
-        with col_metric3:
-            st.metric("Thiết bị đang hoạt động", "...", "-2")
-        st.caption("🔧 *Tiết kiệm và số thiết bị sẽ cập nhật từ module optimization của Pô*")
+        house_list = list(houses_data.keys())
     else:
-        col_metric1, col_metric2, col_metric3 = st.columns(3)
-        with col_metric1:
-            st.metric("Tổng tiêu thụ hôm nay", "124 kWh", "-8%")
-        with col_metric2:
-            st.metric("Tiết kiệm dự kiến", "18 kWh", "+5%")
-        with col_metric3:
-            st.metric("Thiết bị đang hoạt động", "9", "-2")
-    
-    st.caption("So sánh tiêu thụ thực tế (xanh) và dự đoán (cam) - 24h qua")
-    pred_house = load_predictions("house1")
-    if pred_house is not None:
-        df_plot = pred_house.tail(24).copy()
-        df_plot.set_index('timestamp', inplace=True)
-        df_compare = df_plot[['actual', 'predicted']].rename(columns={'actual': 'Thực tế', 'predicted': 'Dự đoán'})
-        st.line_chart(df_compare)
-        st.caption("🔧 *Dự đoán từ linear regression (có thể thay bằng kết quả từ FL)*")
-    elif 'house1' in houses_data:
-        df_house = houses_data['house1'].iloc[-24:]
-        actual = df_house['main'].values
-        predicted = df_house['lag_1'].fillna(method='bfill').values
-        df_compare = pd.DataFrame({
-            'Giờ': range(24),
-            'Thực tế': actual,
-            'Dự đoán': predicted
-        })
-        st.line_chart(df_compare.set_index('Giờ'))
-        st.caption("🔧 *Dự đoán hiện là lag_1 (placeholder) – sẽ thay bằng kết quả từ mô hình của Thành*")
+        house_list = ["house1", "house2", "house3", "house4", "house6"]
+
+    selected_house = st.selectbox("Chọn hộ", house_list, format_func=lambda x: x.capitalize(), key="plot_house")
+    model_type = st.selectbox(
+        "Chọn mô hình",
+        options=["linear_regression", "naive_baseline"],
+        format_func=lambda x: "Linear Regression" if x == "linear_regression" else "Naive Baseline",
+        key="plot_model"
+    )
+
+    img_path = None
+    if plots_dir:
+        possible_ext = ['.png']
+        for ext in possible_ext:
+            candidate = os.path.join(plots_dir, f"{selected_house}_{model_type}{ext}")
+            if os.path.exists(candidate):
+                img_path = candidate
+                break
+    if img_path:
+        st.image(img_path, caption=f"{selected_house.capitalize()} - {model_type.replace('_', ' ').title()}", use_container_width=True)
     else:
-        actual = np.random.normal(5, 1, 24)
-        predicted = np.random.normal(4.8, 1, 24)
-        df_compare = pd.DataFrame({
-            'Giờ': range(24),
-            'Thực tế': actual,
-            'Dự đoán': predicted
-        })
-        st.line_chart(df_compare.set_index('Giờ'))
+        st.info(f"Chưa có biểu đồ cho {selected_house} - {model_type}")
+
+    with st.expander("📊 Xem hệ số hồi quy (Coefficients)"):
+        coef_df = load_coefficients(selected_house)
+        if coef_df is not None:
+            st.markdown(f"**{selected_house.capitalize()} - Hệ số của các đặc trưng**")
+            coef_df['abs_coef'] = coef_df['coefficient'].abs()
+            top_positive = coef_df.nlargest(5, 'coefficient')[['feature', 'coefficient']]
+            top_negative = coef_df.nsmallest(5, 'coefficient')[['feature', 'coefficient']]
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Top 5 hệ số dương (ảnh hưởng cùng chiều)**")
+                st.dataframe(top_positive, use_container_width=True, hide_index=True)
+            with col2:
+                st.markdown("**Top 5 hệ số âm (ảnh hưởng ngược chiều)**")
+                st.dataframe(top_negative, use_container_width=True, hide_index=True)
+            st.caption("Hệ số dương: tăng đặc trưng → tăng dự đoán; ngược lại với hệ số âm.")
+        else:
+            st.info(f"Không tìm thấy file coefficients cho {selected_house}.")
 
 with row3_col2:
     st.subheader("Mức độ ưu tiên thiết bị khi quá tải")
@@ -433,4 +464,3 @@ with row4_col2:
         "- Quá trình này đảm bảo dữ liệu cá nhân không bị lộ ra ngoài."
     )
     st.caption("📌 *Nội dung privacy đã hoàn chỉnh, sẵn sàng cho báo cáo và demo.*")
-
