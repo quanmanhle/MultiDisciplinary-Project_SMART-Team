@@ -1,4 +1,4 @@
-import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -13,8 +13,8 @@ from sklearn.neural_network import MLPRegressor
 # PATH CONFIG
 # =========================
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "processed"
-RESULT_DIR = BASE_DIR / "data" / "resultmlp"
+DATA_DIR = BASE_DIR / "data" / "processed"
+RESULT_DIR = BASE_DIR / "resultmlp"
 PLOT_DIR = RESULT_DIR / "plots"
 
 RESULT_DIR.mkdir(parents=True, exist_ok=True)
@@ -22,9 +22,23 @@ PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
 TARGET_COL = "main"
 
+FEATURE_COLS = [
+    "dish washer",
+    "electric stove",
+    "fridge",
+    "microwave",
+    "washer dryer",
+    "hour_sin",
+    "hour_cos",
+    "day_sin",
+    "day_cos",
+    "lag_1",
+    "rolling_mean",
+]
+
 
 # =========================
-# METRICS
+# HELPERS
 # =========================
 def compute_metrics(y_true, y_pred):
     mae = mean_absolute_error(y_true, y_pred)
@@ -33,37 +47,66 @@ def compute_metrics(y_true, y_pred):
     return mae, rmse, r2
 
 
-# =========================
-# PLOT
-# =========================
 def plot_actual_vs_predicted(timestamps, y_true, y_pred, house_name, model_name):
     plt.figure(figsize=(12, 5))
     plt.plot(timestamps, y_true, label="Actual")
     plt.plot(timestamps, y_pred, label="Predicted")
     plt.title(f"{house_name} - {model_name}: Actual vs Predicted")
     plt.xlabel("Time")
-    plt.ylabel("Main")
+    plt.ylabel("Scaled main")
     plt.legend()
     plt.tight_layout()
     plt.savefig(PLOT_DIR / f"{house_name}_{model_name}.png", dpi=150)
     plt.close()
 
 
-# =========================
-# SPLIT TIME SERIES
-# =========================
-def time_split(df, train_ratio=0.8):
-    split_idx = int(len(df) * train_ratio)
-    train_df = df.iloc[:split_idx].copy()
-    test_df = df.iloc[split_idx:].copy()
-    return train_df, test_df
+def validate_columns(df, required_cols, file_name):
+    missing = [col for col in required_cols if col not in df.columns]
+    if missing:
+        raise ValueError(f"{file_name} is missing columns: {missing}")
+
+
+def find_house_splits(data_dir):
+    """
+    Find house train/test files
+    """
+    train_files = sorted(data_dir.glob("house*_train.csv"))
+    house_map = {}
+
+    for train_path in train_files:
+        match = re.match(r"(house\d+)_train\.csv", train_path.name)
+        if not match:
+            continue
+
+        house_name = match.group(1)
+        valid_path = data_dir / f"{house_name}_valid.csv"
+        test_path = data_dir / f"{house_name}_test.csv"
+
+        if not test_path.exists():
+            print(f"[WARNING] Missing test file for {house_name}: {test_path.name}")
+            continue
+
+        house_map[house_name] = {
+            "train": train_path,
+            "valid": valid_path if valid_path.exists() else None,
+            "test": test_path,
+        }
+
+    return house_map
 
 
 # =========================
-# NAIVE BASELINE
+# MODELS
 # =========================
 def run_naive_baseline(test_df, house_name):
-    valid_df = test_df.dropna(subset=["lag_1", TARGET_COL]).copy()
+    """
+    Naive baseline: predict current target using lag_1.
+    """
+    validate_columns(test_df, [TARGET_COL, "lag_1"], f"{house_name}_test.csv")
+
+    valid_df = test_df.dropna(subset=[TARGET_COL, "lag_1"]).copy()
+    if valid_df.empty:
+        raise ValueError(f"{house_name}: no valid rows for naive baseline.")
 
     y_true = valid_df[TARGET_COL].values
     y_pred = valid_df["lag_1"].values
@@ -76,7 +119,7 @@ def run_naive_baseline(test_df, house_name):
         y_true=y_true,
         y_pred=y_pred,
         house_name=house_name,
-        model_name="naive_baseline"
+        model_name="naive_baseline",
     )
 
     return {
@@ -88,19 +131,20 @@ def run_naive_baseline(test_df, house_name):
     }
 
 
-# =========================
-# MLP REGRESSION
-# =========================
 def run_mlp_regression(train_df, test_df, house_name):
-    feature_cols = [col for col in train_df.columns if col != TARGET_COL]
+    validate_columns(train_df, FEATURE_COLS + [TARGET_COL], f"{house_name}_train.csv")
+    validate_columns(test_df, FEATURE_COLS + [TARGET_COL], f"{house_name}_test.csv")
 
-    train_valid = train_df.dropna(subset=feature_cols + [TARGET_COL]).copy()
-    test_valid = test_df.dropna(subset=feature_cols + [TARGET_COL]).copy()
+    train_valid = train_df.dropna(subset=FEATURE_COLS + [TARGET_COL]).copy()
+    test_valid = test_df.dropna(subset=FEATURE_COLS + [TARGET_COL]).copy()
 
-    X_train = train_valid[feature_cols]
+    if train_valid.empty or test_valid.empty:
+        raise ValueError(f"{house_name}: empty train/test after dropping missing values.")
+
+    X_train = train_valid[FEATURE_COLS]
     y_train = train_valid[TARGET_COL]
 
-    X_test = test_valid[feature_cols]
+    X_test = test_valid[FEATURE_COLS]
     y_test = test_valid[TARGET_COL]
     timestamps = test_valid.index
 
@@ -113,7 +157,7 @@ def run_mlp_regression(train_df, test_df, house_name):
         random_state=42,
         early_stopping=True,
         validation_fraction=0.1,
-        n_iter_no_change=20
+        n_iter_no_change=20,
     )
 
     model.fit(X_train, y_train)
@@ -126,7 +170,7 @@ def run_mlp_regression(train_df, test_df, house_name):
         y_true=y_test,
         y_pred=y_pred,
         house_name=house_name,
-        model_name="mlp_regression"
+        model_name="mlp_regression",
     )
 
     return {
@@ -139,51 +183,50 @@ def run_mlp_regression(train_df, test_df, house_name):
 
 
 # =========================
-# ONE HOUSE
+# PIPELINE
 # =========================
-def process_house(csv_path):
-    house_name = csv_path.stem.replace("_hourly_clean", "")
+def process_house(house_name, file_dict):
     print(f"\n=== Processing {house_name} ===")
 
-    df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
-
-    if TARGET_COL not in df.columns:
-        raise ValueError(f"{house_name} missing target column: {TARGET_COL}")
-
-    train_df, test_df = time_split(df, train_ratio=0.8)
+    train_df = pd.read_csv(file_dict["train"], index_col=0, parse_dates=True)
+    test_df = pd.read_csv(file_dict["test"], index_col=0, parse_dates=True)
 
     naive_result = run_naive_baseline(test_df, house_name)
     mlp_result = run_mlp_regression(train_df, test_df, house_name)
 
     print(
         f"[OK] {house_name} | "
-        f"Naive MAE={naive_result['mae']:.4f}, RMSE={naive_result['rmse']:.4f}, R2={naive_result['r2']:.4f}"
+        f"Naive MAE={naive_result['mae']:.6f}, "
+        f"RMSE={naive_result['rmse']:.6f}, "
+        f"R2={naive_result['r2']:.6f}"
     )
     print(
         f"[OK] {house_name} | "
-        f"MLP   MAE={mlp_result['mae']:.4f}, RMSE={mlp_result['rmse']:.4f}, R2={mlp_result['r2']:.4f}"
+        f"MLP   MAE={mlp_result['mae']:.6f}, "
+        f"RMSE={mlp_result['rmse']:.6f}, "
+        f"R2={mlp_result['r2']:.6f}"
     )
 
     return [naive_result, mlp_result]
 
 
-# =========================
-# MAIN
-# =========================
 def main():
-    csv_files = sorted(DATA_DIR.glob("house*_hourly_clean.csv"))
+    house_splits = find_house_splits(DATA_DIR)
 
-    if len(csv_files) == 0:
-        raise FileNotFoundError(f"No clean files found in: {DATA_DIR}")
+    if not house_splits:
+        raise FileNotFoundError(
+            f"No house split files found in {DATA_DIR}. "
+            f"Expected files like house1_train.csv and house1_test.csv"
+        )
 
     all_results = []
 
-    for csv_path in csv_files:
+    for house_name, file_dict in house_splits.items():
         try:
-            results = process_house(csv_path)
+            results = process_house(house_name, file_dict)
             all_results.extend(results)
         except Exception as e:
-            print(f"[ERROR] {csv_path.name}: {e}")
+            print(f"[ERROR] {house_name}: {e}")
 
     if not all_results:
         raise RuntimeError("No houses were processed successfully.")
