@@ -62,21 +62,73 @@ def find_house_file(project_root: Path, house_name: str) -> Path:
     )
 
 
+def find_house_split_files(project_root: Path, house_name: str) -> Tuple[Path, Path]:
+    """Prefer explicit train/test split files if present."""
+    train_candidates = [
+        project_root / "data" / "processed" / f"{house_name}_train.csv",
+    ]
+    test_candidates = [
+        project_root / "data" / "processed" / f"{house_name}_test.csv",
+    ]
+
+    train_path = next((p for p in train_candidates if p.exists()), None)
+    test_path = next((p for p in test_candidates if p.exists()), None)
+
+    if train_path is not None and test_path is not None:
+        return train_path, test_path
+
+    missing = []
+    if train_path is None:
+        missing.append("train")
+    if test_path is None:
+        missing.append("test")
+
+    raise FileNotFoundError(
+        f"Missing {', '.join(missing)} split file(s) for {house_name}. "
+        f"Checked train: {', '.join(str(p) for p in train_candidates)}; "
+        f"test: {', '.join(str(p) for p in test_candidates)}"
+    )
+
+
 def load_house_xy(project_root: Path, house_name: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[str]]:
-    csv_path = find_house_file(project_root, house_name)
-    df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+    # Ưu tiên dùng dữ liệu đã tách train/test sẵn từ data pipeline:
+    # data/processed/<house>_train.csv và data/processed/<house>_test.csv
+    try:
+        train_path, test_path = find_house_split_files(project_root, house_name)
+        train_df = pd.read_csv(train_path, index_col=0, parse_dates=True)
+        test_df = pd.read_csv(test_path, index_col=0, parse_dates=True)
+        source_name = f"{train_path.name} + {test_path.name}"
+    except FileNotFoundError:
+        csv_path = find_house_file(project_root, house_name)
+        df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+        source_name = csv_path.name
 
-    if TARGET_COL not in df.columns:
-        raise ValueError(f"{csv_path.name} does not contain target column '{TARGET_COL}'")
+        if TARGET_COL not in df.columns:
+            raise ValueError(f"{csv_path.name} does not contain target column '{TARGET_COL}'")
 
-    feature_cols = [c for c in df.columns if c not in {TARGET_COL, SPLIT_COL}]
+        if SPLIT_COL in df.columns:
+            train_df, test_df = split_from_column(df)
+        else:
+            train_df, test_df = split_time_series(df, train_ratio=0.8)
+
+    if TARGET_COL not in train_df.columns or TARGET_COL not in test_df.columns:
+        raise ValueError(f"Split data for {house_name} is missing target column '{TARGET_COL}' (source={source_name})")
+
+    # Đồng bộ cột feature giữa train/test (an toàn khi thứ tự cột khác nhau)
+    train_cols = set(train_df.columns)
+    test_cols = set(test_df.columns)
+    common_cols = [c for c in train_df.columns if c in test_cols]
+
+    if TARGET_COL not in common_cols:
+        raise ValueError(f"Target column '{TARGET_COL}' not found in common columns (source={source_name})")
+
+    feature_cols = [c for c in common_cols if c not in {TARGET_COL, SPLIT_COL}]
     if not feature_cols:
-        raise ValueError(f"{csv_path.name} has no feature columns")
+        raise ValueError(f"No feature columns found for {house_name} (source={source_name})")
 
-    if SPLIT_COL in df.columns:
-        train_df, test_df = split_from_column(df)
-    else:
-        train_df, test_df = split_time_series(df, train_ratio=0.8)
+    # Chỉ giữ các cột chung để tránh lệch cột âm thầm
+    train_df = train_df[feature_cols + [TARGET_COL]].copy()
+    test_df = test_df[feature_cols + [TARGET_COL]].copy()
 
     train_valid = train_df.dropna(subset=feature_cols + [TARGET_COL]).copy()
     test_valid = test_df.dropna(subset=feature_cols + [TARGET_COL]).copy()
@@ -125,8 +177,10 @@ class HouseMlpClient(fl.client.NumPyClient):
 
     def _initialize_model(self) -> None:
         # Fit tối thiểu 1 lần để sklearn tạo cấu trúc weights nội bộ
-        n_bootstrap = max(2, min(len(self.x_train), 32))
-        self.model.fit(self.x_train[:n_bootstrap], self.y_train[:n_bootstrap])
+        # Dùng full local train để khởi tạo ổn định hơn giữa các house.
+        # Nếu chỉ bootstrap ít mẫu đầu, một số house có thể bị bias mạnh từ
+        # đoạn đầu chuỗi thời gian và kéo metric xấu trong các vòng FL đầu.
+        self.model.fit(self.x_train, self.y_train)
 
     def _set_parameters(self, parameters: List[np.ndarray]) -> None:
         n_layers = len(self.model.coefs_)

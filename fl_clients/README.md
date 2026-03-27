@@ -26,17 +26,19 @@ Run mode options:
 
 ## Data rules
 Client searches files in this order:
-1. `data/processed/<house>_hourly_clean.csv`
-2. `models/processed/<house>_hourly_clean.csv` (fallback)
+1. `data/processed/<house>_train.csv` + `data/processed/<house>_test.csv` (preferred)
+2. `data/processed/<house>_hourly_clean.csv` (legacy fallback)
 
 Assumptions:
 - target = `main`
-- features = all columns except `main`
-- split = time-based 80/20 (train/test)
+- features = all columns except `main` and `split`
+- schema safety = uses only common feature columns between train/test
+- split = uses explicit train/test files when available; otherwise time-based 80/20
+- note = `*_hourly_clean.csv` is legacy fallback and is only used when split files are missing
 
 ## Model interface
-- local model: `LinearRegression`
-- shared parameters: `[coef, intercept]`
+- local model: `MLPRegressor` (sklearn)
+- shared parameters: all MLP layer weights + biases
 - evaluate loss: `rmse`
 - returned metrics: `mae`, `rmse`, `r2`, `house`, `num_features`
 
