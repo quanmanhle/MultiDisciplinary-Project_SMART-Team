@@ -2,13 +2,16 @@ import pandas as pd
 import glob
 import os
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import StandardScaler
 
 # Cấu hình đường dẫn
 DATA_DIR = 'raw' 
 OUTPUT_DIR = 'processed'
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
+
+TRAIN_RATIO = 0.7
+VALID_RATIO = 0.1
 
 # BƯỚC 1: HÀM ĐỌC VÀ GHÉP DATA 
 def load_and_merge_house_data(data_folder, house_name):
@@ -37,8 +40,8 @@ COMMON_FEATURES = [
     'fridge',
     'microwave',
     'washer dryer',
-    'hour',
-    'day',
+    'hour_sin', 'hour_cos',
+    'day_sin', 'day_cos',
     'lag_1',
     'rolling_mean'
 ]
@@ -47,11 +50,16 @@ COMMON_FEATURES = [
 def preprocess_pipeline(df):
     df.index = pd.date_range(start='2024-01-01', periods=len(df), freq='3s')
     
-    df_hourly = df.resample('1h').mean().dropna()
+    df_hourly = df.resample('15min').mean().dropna()
     
-    # TIME FEATURES
-    df_hourly['hour'] = df_hourly.index.hour
-    df_hourly['day'] = df_hourly.index.dayofweek
+# --- SỬA: CYCLICAL ENCODING ---
+    # Hour (Chu kỳ 24)
+    df_hourly['hour_sin'] = np.sin(2 * np.pi * df_hourly.index.hour / 24)
+    df_hourly['hour_cos'] = np.cos(2 * np.pi * df_hourly.index.hour / 24)
+    
+    # Day of week (Chu kỳ 7)
+    df_hourly['day_sin'] = np.sin(2 * np.pi * df_hourly.index.dayofweek / 7)
+    df_hourly['day_cos'] = np.cos(2 * np.pi * df_hourly.index.dayofweek / 7)
     
     # TIME SERIES FEATURES 
     df_hourly['lag_1'] = df_hourly['main'].shift(1)
@@ -61,23 +69,7 @@ def preprocess_pipeline(df):
 
     df_hourly = df_hourly.reindex(columns=COMMON_FEATURES + ['main'], fill_value=0)
     
-    target = df_hourly['main']
-    features = df_hourly.drop(columns=['main'])
-
-    # 1. Scaler cho Features
-    feature_scaler = MinMaxScaler()
-    scaled_features = feature_scaler.fit_transform(features)
-
-    # 2. Scaler ĐỘC LẬP cho Target (cần reshape vì target là 1D array)
-    target_scaler = MinMaxScaler()
-    scaled_target = target_scaler.fit_transform(target.values.reshape(-1, 1))
-
-    # Ghép lại vào DataFrame
-    df_scaled = pd.DataFrame(scaled_features, columns=features.columns, index=df_hourly.index)
-    df_scaled['main'] = scaled_target # Target đã được scale [0, 1]
-
-    # Trả về cả 2 scaler để dùng cho lúc test
-    return df_scaled, feature_scaler, target_scaler
+    return df_hourly
 
 
 # BƯỚC 4: TẠO CHUỖI DỮ LIỆU (Sliding Window cho bài toán Regression) 
@@ -105,22 +97,61 @@ for i in houses:
     raw_df = load_and_merge_house_data(DATA_DIR, house_name)
     
     if raw_df is not None:
-        # Tiền xử lý
-        clean_df, feature_scaler, target_scaler = preprocess_pipeline(raw_df)        
-        # Tạo chuỗi Input/Output cho mô hình
-        X, y = create_sequences(clean_df)
+        # 1. Tiền xử lý
+        clean_df = preprocess_pipeline(raw_df)    
+
+        # Chia dữ liệu: Train, Valid, Test theo thứ tự thời gian
+        total_len = len(clean_df)
+        train_end = int(total_len * TRAIN_RATIO)
+        valid_end = int(total_len * (TRAIN_RATIO + VALID_RATIO))
+
+        train_df = clean_df.iloc[:train_end].copy()
+        valid_df = clean_df.iloc[train_end:valid_end].copy()
+        test_df = clean_df.iloc[valid_end:].copy()
+
+        # Xác định các cột cần Scale (tránh scale các cột sin/cos đã chuẩn hóa)
+        feature_cols = [col for col in clean_df.columns if col != 'main']
+        cols_to_scale = [c for c in feature_cols if '_sin' not in c and '_cos' not in c]
+
+        # 3. scale (FIT TRÊN TRAIN)
+        feature_scaler = StandardScaler()
+        target_scaler = StandardScaler()
+
+        train_df[cols_to_scale] = feature_scaler.fit_transform(train_df[cols_to_scale])
+        train_df[['main']] = target_scaler.fit_transform(train_df[['main']])
+
+        # transform val và test
+        valid_df[cols_to_scale] = feature_scaler.transform(valid_df[cols_to_scale])
+        valid_df[['main']] = target_scaler.transform(valid_df[['main']])
+
+        test_df[cols_to_scale] = feature_scaler.transform(test_df[cols_to_scale])
+        test_df[['main']] = target_scaler.transform(test_df[['main']])
+
+        # 4. Tạo chuỗi 
+        X_train, y_train = create_sequences(train_df)
+        X_valid, y_valid = create_sequences(valid_df)
+        X_test, y_test = create_sequences(test_df)
         
         # Lưu trữ để dùng cho Federated Learning sau này
         all_house_data[house_name] = {
-                    'X': X, 
-                    'y': y,
-                    'feature_scaler': feature_scaler,
-                    'target_scaler': target_scaler
-                }  
+            'X_train': X_train, 
+            'y_train': y_train,
+            'X_valid': X_valid, 
+            'y_valid': y_valid,
+            'X_test': X_test,
+            'y_test': y_test,
+            'feature_scaler': feature_scaler,
+            'target_scaler': target_scaler
+        }   
               
-        print(f"   Kích thước X: {X.shape} | Kích thước y: {y.shape}")
+        print(f"   Train: X={X_train.shape}, y={y_train.shape}")
+        print(f"   Valid: X={X_valid.shape}, y={y_valid.shape}")
+        print(f"   Test : X={X_test.shape}, y={y_test.shape}")
         
         # Lưu file sạch ra máy để kiểm tra 
-        clean_df.to_csv(f"{OUTPUT_DIR}/{house_name}_hourly_clean.csv")
+        clean_df.to_csv(f"{OUTPUT_DIR}/{house_name}_clean.csv")
+        train_df.to_csv(f"{OUTPUT_DIR}/{house_name}_train.csv")
+        valid_df.to_csv(f"{OUTPUT_DIR}/{house_name}_valid.csv")
+        test_df.to_csv(f"{OUTPUT_DIR}/{house_name}_test.csv")
 
 print("\n--- HOÀN THÀNH TOÀN BỘ DATA PIPELINE ---")
