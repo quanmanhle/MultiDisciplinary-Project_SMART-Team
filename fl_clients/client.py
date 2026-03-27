@@ -1,16 +1,21 @@
 import argparse
+import warnings
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import flwr as fl
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LinearRegression
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.neural_network import MLPRegressor
 
 
 TARGET_COL = "main"
+SPLIT_COL = "split"
 HOUSE_ORDER = ["house1", "house2", "house3", "house4", "house6"]
+
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
 
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
@@ -25,6 +30,21 @@ def split_time_series(df: pd.DataFrame, train_ratio: float = 0.8) -> Tuple[pd.Da
     train_df = df.iloc[:split_idx].copy()
     test_df = df.iloc[split_idx:].copy()
     return train_df, test_df
+
+
+def split_from_column(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    split_values = df[SPLIT_COL].astype(str).str.strip().str.lower()
+
+    train_mask = split_values.isin({"train", "tr", "0", "false"})
+    test_mask = split_values.isin({"test", "te", "1", "true", "val", "validation"})
+
+    if train_mask.sum() == 0 or test_mask.sum() == 0:
+        raise ValueError(
+            f"{SPLIT_COL} column exists but cannot determine train/test groups. "
+            f"train={int(train_mask.sum())}, test={int(test_mask.sum())}"
+        )
+
+    return df.loc[train_mask].copy(), df.loc[test_mask].copy()
 
 
 def find_house_file(project_root: Path, house_name: str) -> Path:
@@ -49,11 +69,14 @@ def load_house_xy(project_root: Path, house_name: str) -> Tuple[np.ndarray, np.n
     if TARGET_COL not in df.columns:
         raise ValueError(f"{csv_path.name} does not contain target column '{TARGET_COL}'")
 
-    feature_cols = [c for c in df.columns if c != TARGET_COL]
+    feature_cols = [c for c in df.columns if c not in {TARGET_COL, SPLIT_COL}]
     if not feature_cols:
         raise ValueError(f"{csv_path.name} has no feature columns")
 
-    train_df, test_df = split_time_series(df, train_ratio=0.8)
+    if SPLIT_COL in df.columns:
+        train_df, test_df = split_from_column(df)
+    else:
+        train_df, test_df = split_time_series(df, train_ratio=0.8)
 
     train_valid = train_df.dropna(subset=feature_cols + [TARGET_COL]).copy()
     test_valid = test_df.dropna(subset=feature_cols + [TARGET_COL]).copy()
@@ -73,8 +96,8 @@ def load_house_xy(project_root: Path, house_name: str) -> Tuple[np.ndarray, np.n
     return x_train, y_train, x_test, y_test, feature_cols
 
 
-class HouseLinearClient(fl.client.NumPyClient):
-    """Client Flower cho 1 nhà, dùng LinearRegression để khớp local model."""
+class HouseMlpClient(fl.client.NumPyClient):
+    """Flower client for one house, using MLPRegressor as the local model."""
 
     def __init__(self, house_name: str, x_train: np.ndarray, y_train: np.ndarray, x_test: np.ndarray, y_test: np.ndarray, feature_cols: List[str]) -> None:
         self.house_name = house_name
@@ -85,33 +108,63 @@ class HouseLinearClient(fl.client.NumPyClient):
         self.feature_cols = feature_cols
 
         self.n_features = x_train.shape[1]
-        self.model = LinearRegression()
+        self.model = MLPRegressor(
+            hidden_layer_sizes=(64, 32),
+            activation="relu",
+            solver="adam",
+            learning_rate_init=0.001,
+            max_iter=500,
+            warm_start=True,
+            shuffle=True,
+            early_stopping=True,
+            validation_fraction=0.1,
+            n_iter_no_change=20,
+            random_state=42,
+        )
         self._initialize_model()
 
     def _initialize_model(self) -> None:
-        # Khởi tạo tham số để round đầu tiên vẫn get/set được
-        self.model.coef_ = np.zeros(self.n_features, dtype=np.float64)
-        self.model.intercept_ = np.array(0.0, dtype=np.float64)
-        self.model.n_features_in_ = self.n_features
+        # Fit tối thiểu 1 lần để sklearn tạo cấu trúc weights nội bộ
+        n_bootstrap = max(2, min(len(self.x_train), 32))
+        self.model.fit(self.x_train[:n_bootstrap], self.y_train[:n_bootstrap])
 
     def _set_parameters(self, parameters: List[np.ndarray]) -> None:
-        coef = np.array(parameters[0], dtype=np.float64)
-        intercept = np.array(parameters[1], dtype=np.float64)
+        n_layers = len(self.model.coefs_)
+        expected_param_count = n_layers * 2
 
-        if coef.shape[0] != self.n_features:
+        if len(parameters) != expected_param_count:
             raise ValueError(
-                f"Feature count mismatch for {self.house_name}: "
-                f"received coef size={coef.shape[0]}, expected={self.n_features}"
+                f"Parameter count mismatch for {self.house_name}: "
+                f"received={len(parameters)}, expected={expected_param_count}"
             )
 
-        self.model.coef_ = coef
-        self.model.intercept_ = float(intercept.reshape(-1)[0])
+        new_coefs = [np.array(parameters[i], dtype=np.float64) for i in range(n_layers)]
+        new_intercepts = [
+            np.array(parameters[n_layers + i], dtype=np.float64) for i in range(n_layers)
+        ]
+
+        for i, (old_w, new_w) in enumerate(zip(self.model.coefs_, new_coefs)):
+            if old_w.shape != new_w.shape:
+                raise ValueError(
+                    f"Weight shape mismatch at layer {i} for {self.house_name}: "
+                    f"received={new_w.shape}, expected={old_w.shape}"
+                )
+
+        for i, (old_b, new_b) in enumerate(zip(self.model.intercepts_, new_intercepts)):
+            if old_b.shape != new_b.shape:
+                raise ValueError(
+                    f"Bias shape mismatch at layer {i} for {self.house_name}: "
+                    f"received={new_b.shape}, expected={old_b.shape}"
+                )
+
+        self.model.coefs_ = new_coefs
+        self.model.intercepts_ = new_intercepts
         self.model.n_features_in_ = self.n_features
 
     def _get_parameters(self) -> List[np.ndarray]:
-        coef = np.array(self.model.coef_, dtype=np.float64)
-        intercept = np.array([self.model.intercept_], dtype=np.float64)
-        return [coef, intercept]
+        weights = [np.array(w, dtype=np.float64) for w in self.model.coefs_]
+        biases = [np.array(b, dtype=np.float64) for b in self.model.intercepts_]
+        return weights + biases
 
     def get_parameters(self, config):
         return self._get_parameters()
@@ -127,6 +180,7 @@ class HouseLinearClient(fl.client.NumPyClient):
             {
                 "house": self.house_name,
                 "num_features": float(self.n_features),
+                "model": "mlp_regression",
             }
         )
 
@@ -141,6 +195,7 @@ class HouseLinearClient(fl.client.NumPyClient):
             {
                 "house": self.house_name,
                 "num_features": float(self.n_features),
+                "model": "mlp_regression",
             }
         )
 
@@ -196,7 +251,7 @@ def main() -> None:
     print(f"[CLIENT] Train shape: x={x_train.shape}, y={y_train.shape}")
     print(f"[CLIENT] Test shape : x={x_test.shape}, y={y_test.shape}")
 
-    client = HouseLinearClient(
+    client = HouseMlpClient(
         house_name=house_name,
         x_train=x_train,
         y_train=y_train,
