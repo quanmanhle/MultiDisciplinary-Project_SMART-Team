@@ -5,7 +5,6 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import os
 
-# ===== CẤU HÌNH TRANG =====
 st.set_page_config(
     page_title="Smart Home Energy Dashboard",
     page_icon="🏠",
@@ -17,7 +16,6 @@ st.title("Smart Home Energy Optimization")
 st.markdown("Federated Learning based Smart Home Energy Monitoring")
 st.divider()
 
-# ===== HÀM TIỆN ÍCH =====
 def progress_circle(value, title, height=150):
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
@@ -60,6 +58,7 @@ BASE_DIR = os.path.dirname(current_dir)
 DATA_PATH = os.path.join(BASE_DIR, "data", "processed")
 MODELS_RESULTS_DIR = os.path.join(BASE_DIR, "models", "results")
 RESULTS_DIR = os.path.join(BASE_DIR, "results")
+COEF_DIR = MODELS_RESULTS_DIR
 
 def find_file(filename):
     candidates = [
@@ -96,10 +95,13 @@ fl_log_path = find_file("fl_round_logs.csv")
 
 # ===== ĐỌC DỮ LIỆU =====
 def load_house_data(house_name):
-    file_path = os.path.join(DATA_PATH, f"{house_name}_hourly_clean.csv")
-    if os.path.exists(file_path):
-        df = pd.read_csv(file_path, index_col=0, parse_dates=True)
-        return df
+    # Thử tên file houseX_clean.csv (ưu tiên) và houseX_hourly_clean.csv
+    patterns = [f"{house_name}_clean.csv", f"{house_name}_hourly_clean.csv"]
+    for pattern in patterns:
+        file_path = os.path.join(DATA_PATH, pattern)
+        if os.path.exists(file_path):
+            df = pd.read_csv(file_path, index_col=0, parse_dates=True)
+            return df
     return None
 
 def load_all_houses():
@@ -117,6 +119,7 @@ def load_fl_logs():
     return None
 
 def load_local_metrics():
+    """Load local_metrics.csv (mae, rmse, r2 cho naive_baseline và mlp_regression)"""
     if local_metrics_file and os.path.exists(local_metrics_file):
         df = pd.read_csv(local_metrics_file)
         if 'house' not in df.columns:
@@ -126,6 +129,7 @@ def load_local_metrics():
     return None
 
 def load_fl_client_metrics():
+    """Load fl_client_test_results.csv (train_r2, test_mae, test_rmse, test_r2, test_loss)"""
     if fl_client_metrics_file and os.path.exists(fl_client_metrics_file):
         df = pd.read_csv(fl_client_metrics_file)
         if 'house' not in df.columns:
@@ -150,7 +154,7 @@ def load_predictions(house_name):
     return None
 
 def load_coefficients(house_name):
-    file_path = os.path.join(MODELS_RESULTS_DIR, f"{house_name}_coefficients.csv")
+    file_path = os.path.join(COEF_DIR, f"{house_name}_coefficients.csv")
     if os.path.exists(file_path):
         df = pd.read_csv(file_path)
         return df
@@ -161,7 +165,6 @@ fl_logs = load_fl_logs()
 local_metrics = load_local_metrics()
 fl_client_metrics = load_fl_client_metrics()
 
-# ===== HÀNG 1: TỔNG QUAN HỆ THỐNG =====
 st.header("📊 Tổng quan hệ thống")
 row1_col1, row1_col2 = st.columns([1, 2])
 
@@ -221,7 +224,6 @@ with row1_col2:
 
 st.divider()
 
-# ===== HÀNG 2: TRẠNG THÁI CLIENT & SO SÁNH MÔ HÌNH =====
 st.header("📈 Trạng thái các client & so sánh mô hình")
 row2_col1, row2_col2 = st.columns(2)
 
@@ -233,6 +235,7 @@ with row2_col1:
             total_consumption = df['main'].sum()
             avg_consumption = df['main'].mean()
             devices = np.random.randint(3, 8)
+
             train_r2_fl = "..."
             test_r2_local = "..."
             test_r2_fl = "..."
@@ -242,7 +245,7 @@ with row2_col1:
             test_rmse_fl = "..."
 
             if local_metrics is not None:
-                mask = (local_metrics['house'] == house_name) & (local_metrics['model'] == 'linear_regression')
+                mask = (local_metrics['house'] == house_name) & (local_metrics['model'] == 'mlp_regression')
                 if mask.any():
                     row = local_metrics.loc[mask].iloc[0]
                     test_r2_local = f"{row['r2']:.3f}" if pd.notna(row['r2']) else "..."
@@ -260,7 +263,7 @@ with row2_col1:
 
             clients_list.append({
                 "Hộ": house_name,
-                "Tổng tiêu thụ(kWh)": f"{total_consumption:.2f}",
+                "Tổng tiêu thụ": f"{total_consumption:.2f}",
                 "Trung bình": f"{avg_consumption:.2f}",
                 "Train R² (FL)": train_r2_fl,
                 "Test R² (Local)": test_r2_local,
@@ -273,7 +276,7 @@ with row2_col1:
             })
         df_clients = pd.DataFrame(clients_list)
         st.dataframe(df_clients, use_container_width=True, hide_index=True)
-        st.caption("🔧 **Chú thích:** Train R² (FL) từ kết quả huấn luyện FL client; Test metrics (Local) từ mô hình local (linear regression); Test metrics (FL) từ đánh giá FL client.")
+        st.caption("🔧 **Chú thích:** Train R² (FL) từ kết quả huấn luyện FL client; Test metrics (Local) từ mô hình MLP địa phương; Test metrics (FL) từ đánh giá FL client.")
     else:
         st.info("Không có dữ liệu hộ. Kiểm tra thư mục data/processed.")
 
@@ -289,11 +292,11 @@ with row2_col2:
         else:
             naive_r2, naive_mae, naive_rmse = -0.1, 0.05, 0.1
 
-        lr_mask = local_metrics['model'] == 'linear_regression'
-        if lr_mask.any():
-            local_r2 = local_metrics.loc[lr_mask, 'r2'].mean()
-            local_mae = local_metrics.loc[lr_mask, 'mae'].mean()
-            local_rmse = local_metrics.loc[lr_mask, 'rmse'].mean()
+        mlp_mask = local_metrics['model'] == 'mlp_regression'
+        if mlp_mask.any():
+            local_r2 = local_metrics.loc[mlp_mask, 'r2'].mean()
+            local_mae = local_metrics.loc[mlp_mask, 'mae'].mean()
+            local_rmse = local_metrics.loc[mlp_mask, 'rmse'].mean()
         else:
             local_r2, local_mae, local_rmse = 0.5, 0.02, 0.06
 
@@ -303,7 +306,7 @@ with row2_col2:
 
         model_r2 = {
             "Naive (baseline)": naive_r2,
-            "Local (linear)": local_r2,
+            "Local (MLP)": local_r2,
             "Federated (FL)": fed_r2
         }
         df_models = pd.DataFrame.from_dict(model_r2, orient='index', columns=['R²'])
@@ -311,17 +314,18 @@ with row2_col2:
 
         st.markdown("**So sánh chi tiết các chỉ số (trung bình trên các hộ)**")
         comparison_df = pd.DataFrame({
-            "Mô hình": ["Naive baseline", "Local linear", "Federated FL"],
+            "Mô hình": ["Naive baseline", "Local MLP", "Federated FL"],
             "R²": [f"{naive_r2:.3f}", f"{local_r2:.3f}", f"{fed_r2:.3f}"],
             "MAE": [f"{naive_mae:.3f}", f"{local_mae:.3f}", f"{fed_mae:.3f}"],
             "RMSE": [f"{naive_rmse:.3f}", f"{local_rmse:.3f}", f"{fed_rmse:.3f}"]
         })
         st.dataframe(comparison_df, use_container_width=True, hide_index=True)
-        st.caption("🔧 *Giá trị trung bình trên 5 hộ. Federated metrics từ kết quả đánh giá client; Local và Naive từ local_metrics.csv.*")
+        st.caption("🔧 *Giá trị trung bình trên 5 hộ. Federated metrics từ kết quả đánh giá client; Local từ local_metrics.csv.*")
     else:
+        # Fallback
         model_acc = {
             "Naive (trung bình)": 0.65,
-            "Local (hồi quy)": 0.78,
+            "Local (MLP)": 0.78,
             "Federated (FL)": 0.84
         }
         df_models = pd.DataFrame.from_dict(model_acc, orient='index', columns=['Độ chính xác'])
@@ -337,7 +341,6 @@ with row2_col2:
 
 st.divider()
 
-# ===== HÀNG 2.5: FL TRAINING MONITOR =====
 st.header("📉 FL Training Monitor")
 if fl_logs is not None and not fl_logs.empty:
     st.subheader("Loss qua các vòng FL")
@@ -356,7 +359,6 @@ else:
 
 st.divider()
 
-# ===== HÀNG 3: TỐI ƯU HÓA & ĐIỀU KHIỂN =====
 st.header("⚡ Tối ưu hóa & điều khiển")
 row3_col1, row3_col2 = st.columns(2)
 
@@ -372,8 +374,8 @@ with row3_col1:
     selected_house = st.selectbox("Chọn hộ", house_list, format_func=lambda x: x.capitalize(), key="plot_house")
     model_type = st.selectbox(
         "Chọn mô hình",
-        options=["linear_regression", "naive_baseline"],
-        format_func=lambda x: "Linear Regression" if x == "linear_regression" else "Naive Baseline",
+        options=["mlp_regression", "naive_baseline"],
+        format_func=lambda x: "MLP Regression" if x == "mlp_regression" else "Naive Baseline",
         key="plot_model"
     )
 
@@ -390,23 +392,7 @@ with row3_col1:
     else:
         st.info(f"Chưa có biểu đồ cho {selected_house} - {model_type}")
 
-    with st.expander("📊 Xem hệ số hồi quy (Coefficients)"):
-        coef_df = load_coefficients(selected_house)
-        if coef_df is not None:
-            st.markdown(f"**{selected_house.capitalize()} - Hệ số của các đặc trưng**")
-            coef_df['abs_coef'] = coef_df['coefficient'].abs()
-            top_positive = coef_df.nlargest(5, 'coefficient')[['feature', 'coefficient']]
-            top_negative = coef_df.nsmallest(5, 'coefficient')[['feature', 'coefficient']]
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**Top 5 hệ số dương (ảnh hưởng cùng chiều)**")
-                st.dataframe(top_positive, use_container_width=True, hide_index=True)
-            with col2:
-                st.markdown("**Top 5 hệ số âm (ảnh hưởng ngược chiều)**")
-                st.dataframe(top_negative, use_container_width=True, hide_index=True)
-            st.caption("Hệ số dương: tăng đặc trưng → tăng dự đoán; ngược lại với hệ số âm.")
-        else:
-            st.info(f"Không tìm thấy file coefficients cho {selected_house}.")
+
 
 with row3_col2:
     st.subheader("Mức độ ưu tiên thiết bị khi quá tải")
@@ -427,7 +413,6 @@ with row3_col2:
 
 st.divider()
 
-# ===== HÀNG 4: ĐIỀU KHIỂN & BẢO MẬT =====
 st.header("🛠️ Điều khiển & Bảo mật")
 row4_col1, row4_col2 = st.columns(2)
 
@@ -452,7 +437,6 @@ with row4_col1:
             "Công suất (W)": [1200, 150, 500, 2000, 60]
         }
         st.dataframe(pd.DataFrame(status_data), use_container_width=True, hide_index=True)
-    st.caption("🔧 *Phần điều khiển hiện là mô phỏng – sẽ tích hợp với module optimization của Pô*")
 
 with row4_col2:
     st.subheader("Tổng quan về quyền riêng tư")
@@ -463,4 +447,4 @@ with row4_col2:
         "- Chỉ các trọng số mô hình được gửi về máy chủ trung tâm để tổng hợp.\n"
         "- Quá trình này đảm bảo dữ liệu cá nhân không bị lộ ra ngoài."
     )
-    st.caption("📌 *Nội dung privacy đã hoàn chỉnh, sẵn sàng cho báo cáo và demo.*")
+
