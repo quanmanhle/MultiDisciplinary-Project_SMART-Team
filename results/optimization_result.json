@@ -1,0 +1,31 @@
+{
+  "actions": [
+    {
+      "device": "dish washer",
+      "action": "off",
+      "reason": "peak predicted"
+    },
+    {
+      "device": "washer dryer",
+      "action": "off",
+      "reason": "peak predicted"
+    },
+    {
+      "device": "microwave",
+      "action": "off",
+      "reason": "peak predicted"
+    },
+    {
+      "device": "electric stove",
+      "action": "defer",
+      "reason": "medium priority during peak"
+    }
+  ],
+  "peak_detected": true,
+  "predicted_main": 0.18,
+  "threshold": 0.12,
+  "estimated_reduced_load": 0.14,
+  "estimated_post_optimization_load": 0.03999999999999998,
+  "devices_turned_off": 3,
+  "peak_resolved": true
+}
