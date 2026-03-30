@@ -11,7 +11,7 @@ LOG_FILE = "results/fl_round_logs.csv"
 # CHỈ ĐỔI Ở ĐÂY KHI TEST
 # =========================
 NUM_ROUNDS = 10
-TEST_MODE_ONE_CLIENT = True  # True: test 1 client trước | False: chạy chính thức 5 clients
+TEST_MODE_ONE_CLIENT = False  # True: test 1 client trước | False: chạy chính thức 5 clients
 
 
 def weighted_average(metrics: list[tuple[int, dict[str, Any]]]) -> dict[str, float]:
@@ -84,7 +84,7 @@ class CsvLoggingFedAvg(fl.server.strategy.FedAvg):
                     mae,
                     rmse,
                     r2,
-                    datetime.now().isoformat(timespec="seconds"),
+                    datetime.now().isoformat(timespec="milliseconds"),
                 ]
             )
 
