@@ -192,15 +192,26 @@ with row1_col2:
     st.subheader("Dự báo tiêu thụ hôm nay (kWh)")
     if 'house1' in houses_data:
         df_house = houses_data['house1']
-        last_24h = df_house.iloc[-24:].copy()
+        if not isinstance(df_house.index, pd.DatetimeIndex):
+            df_house.index = pd.to_datetime(df_house.index)
+        
+        last_time = df_house.index.max()
+        start_time = last_time - pd.Timedelta(hours=23)
+        last_24h = df_house.loc[start_time:last_time].copy()
+        
+        if len(last_24h) < 24:
+            st.warning(f"⚠️ Chỉ có {len(last_24h)} điểm dữ liệu trong 24h qua. Biểu đồ và chỉ số dựa trên các điểm này.")
+        
         last_24h['hour'] = last_24h.index.hour
         hourly = last_24h.groupby('hour')['main'].mean().reset_index()
         st.bar_chart(hourly.set_index('hour'))
+        
         total = last_24h['main'].sum()
         peak_row = hourly.loc[hourly['main'].idxmax()]
         peak_hour = int(peak_row['hour'])
         peak_val = peak_row['main']
         avg = last_24h['main'].mean()
+        
         col_stat1, col_stat2, col_stat3 = st.columns(3)
         with col_stat1:
             st.metric("Tổng dự báo", f"{total:.2f}", "-5%")
@@ -221,7 +232,6 @@ with row1_col2:
             st.metric("Giờ cao điểm", f"{int(peak['hour'])}h", f"{peak['consumption_kwh']:.1f} kWh")
         with col_stat3:
             st.metric("Trung bình", f"{df_energy['consumption_kwh'].mean():.1f} kWh", "+2%")
-
 st.divider()
 
 st.header("📈 Trạng thái các client & so sánh mô hình")
@@ -341,23 +351,50 @@ with row2_col2:
 
 st.divider()
 
+# ===== HÀNG 2.5: FL TRAINING MONITOR =====
 st.header("📉 FL Training Monitor")
 if fl_logs is not None and not fl_logs.empty:
-    st.subheader("Loss qua các vòng FL")
-    st.line_chart(fl_logs.set_index('round')[['loss']])
+    # Biểu đồ loss với trục Y tự chỉnh
+    fig_loss = go.Figure()
+    fig_loss.add_trace(go.Scatter(
+        x=fl_logs['round'], y=fl_logs['loss'],
+        mode='lines+markers', name='Loss',
+        line=dict(color='red', width=2)
+    ))
+    fig_loss.update_layout(
+        title="Loss qua các vòng FL",
+        xaxis_title="Round",
+        yaxis_title="Loss",
+        yaxis=dict(range=[min(fl_logs['loss'])*0.99, max(fl_logs['loss'])*1.01]),
+        height=400
+    )
+    st.plotly_chart(fig_loss, use_container_width=True)
+
     if 'mae' in fl_logs.columns and 'rmse' in fl_logs.columns:
-        st.subheader("MAE và RMSE qua các vòng FL")
-        st.line_chart(fl_logs.set_index('round')[['mae', 'rmse']])
+        fig_metrics = go.Figure()
+        fig_metrics.add_trace(go.Scatter(
+            x=fl_logs['round'], y=fl_logs['mae'],
+            mode='lines+markers', name='MAE'
+        ))
+        fig_metrics.add_trace(go.Scatter(
+            x=fl_logs['round'], y=fl_logs['rmse'],
+            mode='lines+markers', name='RMSE'
+        ))
+        fig_metrics.update_layout(
+            title="MAE và RMSE qua các vòng FL",
+            xaxis_title="Round",
+            yaxis_title="Giá trị",
+            height=400
+        )
+        st.plotly_chart(fig_metrics, use_container_width=True)
+
     last_round = fl_logs['round'].iloc[-1]
     last_loss = fl_logs['loss'].iloc[-1]
     st.metric("Số vòng đã chạy", last_round)
-    st.metric("Loss cuối cùng", f"{last_loss:.4f}")
+    st.metric("Loss cuối cùng", f"{last_loss:.6f}")
     st.caption("✅ *Dữ liệu được lấy từ results/fl_round_logs.csv*")
 else:
     st.info("📭 Chưa có dữ liệu FL logs. Hãy chạy Flower server và đảm bảo file results/fl_round_logs.csv được tạo.")
-    st.caption("🔧 *Sẽ hiển thị biểu đồ loss, MAE, RMSE khi có log*")
-
-st.divider()
 
 st.header("⚡ Tối ưu hóa & điều khiển")
 row3_col1, row3_col2 = st.columns(2)
