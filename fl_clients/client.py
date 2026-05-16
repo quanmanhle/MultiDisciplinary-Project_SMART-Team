@@ -13,7 +13,8 @@ from sklearn.neural_network import MLPRegressor
 
 TARGET_COL = "main"
 SPLIT_COL = "split"
-HOUSE_ORDER = ["house1", "house2", "house3", "house4", "house6"]
+HOUSE_ORDER = ["house1", "house2", "house3", "house4", "house5",
+               "house6", "house7", "house8", "house9", "house10"]
 
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
@@ -49,6 +50,9 @@ def split_from_column(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
 def find_house_file(project_root: Path, house_name: str) -> Path:
     candidates = [
+        project_root / "data" / "data" / "processed" / f"{house_name}_clean.csv",
+        project_root / "data" / "processed" / f"{house_name}_clean.csv",
+        project_root / "data" / "data" / "processed" / f"{house_name}_hourly_clean.csv",
         project_root / "data" / "processed" / f"{house_name}_hourly_clean.csv",
     ]
 
@@ -65,9 +69,11 @@ def find_house_file(project_root: Path, house_name: str) -> Path:
 def find_house_split_files(project_root: Path, house_name: str) -> Tuple[Path, Path]:
     """Prefer explicit train/test split files if present."""
     train_candidates = [
+        project_root / "data" / "data" / "processed" / f"{house_name}_train.csv",
         project_root / "data" / "processed" / f"{house_name}_train.csv",
     ]
     test_candidates = [
+        project_root / "data" / "data" / "processed" / f"{house_name}_test.csv",
         project_root / "data" / "processed" / f"{house_name}_test.csv",
     ]
 
@@ -280,7 +286,8 @@ def parse_args() -> argparse.Namespace:
     group.add_argument(
         "--client-index",
         type=int,
-        help="Client-to-house mapping: 0->house1, 1->house2, 2->house3, 3->house4, 4->house6",
+        choices=range(10),
+        help="Client-to-house mapping: 0->house1, 1->house2, ..., 9->house10",
     )
 
     parser.add_argument(
