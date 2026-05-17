@@ -2,9 +2,11 @@
 run_clients.py  –  Launch all 10 FL clients in parallel via subprocess.
 
 Usage:
-    python fl_clients/run_clients.py                           # default: 10 clients, server 127.0.0.1:8080
-    python fl_clients/run_clients.py --num-clients 5           # only launch clients 0-4
+    python fl_clients/run_clients.py                             # default: 10 clients, watt mode
+    python fl_clients/run_clients.py --num-clients 5             # only launch clients 0-4
     python fl_clients/run_clients.py --server-address host:port
+    python fl_clients/run_clients.py --data-mode standard        # use pre-scaled CSVs
+    python fl_clients/run_clients.py --cap 1000                  # cap training rows per house
 
 Press Ctrl+C to gracefully terminate all running client processes.
 """
@@ -34,6 +36,25 @@ def parse_args() -> argparse.Namespace:
         help="Flower server address (default: 127.0.0.1:8080)",
     )
     parser.add_argument(
+        "--data-mode",
+        choices=["watt", "standard"],
+        default="watt",
+        help=(
+            "watt: read house*_clean.csv, MinMaxScale internally (recommended). "
+            "standard: use pre-scaled StandardScaled train/test CSVs."
+        ),
+    )
+    parser.add_argument(
+        "--cap",
+        type=int,
+        default=1000,
+        help=(
+            "Cap training rows per house (default: 1000). "
+            "Balances REDD (~562-812 rows) vs UK-DALE (up to 105k rows) so FL is fast and fair. "
+            "Set to 0 to disable capping (use all rows)."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Pass --dry-run to each client (offline test, no server needed)",
@@ -55,10 +76,14 @@ def main() -> None:
 
     processes: list[subprocess.Popen] = []
 
+    cap_effective = args.cap if (args.cap is not None and args.cap > 0) else None
+
     print(f"[LAUNCHER] Starting {num} FL client(s) ...")
-    print(f"[LAUNCHER] Server address: {args.server_address}")
-    print(f"[LAUNCHER] Dry-run mode: {args.dry_run}")
-    print("-" * 50)
+    print(f"[LAUNCHER] Server address : {args.server_address}")
+    print(f"[LAUNCHER] Data mode      : {args.data_mode}")
+    print(f"[LAUNCHER] Training cap   : {cap_effective if cap_effective else 'disabled (all rows)'}")
+    print(f"[LAUNCHER] Dry-run mode   : {args.dry_run}")
+    print("-" * 55)
 
     try:
         for idx in range(num):
@@ -67,7 +92,10 @@ def main() -> None:
                 str(CLIENT_SCRIPT),
                 "--client-index", str(idx),
                 "--server-address", args.server_address,
+                "--data-mode", args.data_mode,
             ]
+            if args.cap is not None:
+                cmd += ["--cap", str(args.cap)]
             if args.dry_run:
                 cmd.append("--dry-run")
 
@@ -79,7 +107,7 @@ def main() -> None:
             if idx < num - 1:
                 time.sleep(0.5)
 
-        print("-" * 50)
+        print("-" * 55)
         print(f"[LAUNCHER] All {num} clients launched. Press Ctrl+C to stop.")
 
         # Wait for all child processes to finish
