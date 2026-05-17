@@ -277,8 +277,9 @@ def load_house_xy(
             f"train={len(train_valid)}, test={len(test_valid)}"
         )
 
-    # Drop zero-variance features before scaling
-    feature_cols = drop_zero_variance(train_valid, feature_cols)
+    # Do NOT drop zero-variance features. In Federated Learning with FedAvg,
+    # all clients MUST have identical input feature dimensions (weight shapes).
+    # feature_cols = drop_zero_variance(train_valid, feature_cols)
 
     # Optionally cap training rows (reduces REDD/UK-DALE imbalance).
     # cap=None or cap=0 -> no limit; cap>0 -> subsample to that many rows.
@@ -353,17 +354,18 @@ class HouseMlpClient(fl.client.NumPyClient):
         self.n_features = x_train.shape[1]
         n_train = len(x_train)
 
-        # Adapt architecture based on dataset size.
+        # IMPORTANT: ALL clients must share the same hidden_layer_sizes so that
+        # FedAvg can average weights without shape mismatch.
+        # Only alpha (L2) and lr adapt to dataset size since they don't affect weight shapes.
         # max_iter=100 per FL round is intentional: with warm_start=True the model
         # accumulates ~num_rounds*100 effective iterations across all FL rounds,
         # keeping each local fit fast (per team decision to speed up FL training).
+        hidden_sizes = (64, 32)          # FIXED across all clients - required for FedAvg
         if n_train < 1000:
-            hidden_sizes = (32, 16)
-            alpha = 0.01
+            alpha = 0.01                 # stronger L2 regularization for small datasets
             max_iter = 100
             lr = 0.0005
         else:
-            hidden_sizes = (64, 32)
             alpha = 0.0001
             max_iter = 100
             lr = 0.001
