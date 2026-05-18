@@ -1,5 +1,11 @@
-raw/
+# Bỏ qua dữ liệu đã xử lý
 processed/
-*.csv
+
+# CHỈ bỏ qua UK-DALE, cho phép REDD
+raw/UK-DALE dataset/
+
+# Bỏ qua các file siêu nặng của UK-DALE
 *.dat
+
+# Bỏ qua rác hệ thống
 __pycache__/
