@@ -1,0 +1,2 @@
+round,loss_rmse,mae,rmse,r2,train_rows,test_rows,data_mode,timestamp
+1,164.503148,126.58966,164.503148,0.254772,562,161,watt,2026-05-17T15:46:50
